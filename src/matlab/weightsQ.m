@@ -21,6 +21,12 @@ function Q = weightsQ(k, m, dx)
 %                k : Order of accuracy
 %                m : Number of cells
 %               dx : Step size
+% Returns the m+2 weights of Q
+%
+% Parameters:
+%                k : Order of accuracy
+%                m : Number of cells
+%               dx : Step size
 
     D = div(k, m, dx);
     

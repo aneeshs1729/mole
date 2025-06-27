@@ -13,107 +13,82 @@
 % <https://www.gnu.org/licenses/> for more details.
 %
 % ------------------------------------------------------------------------
+    % Returns a (m+2) x (m+1) one-dimensional mimetic divergence operator
 
-function D = div(k, m, dx)
-% Returns a m+2 by m+1 one-dimensional mimetic divergence operator
+    % Input validation
+    function D = div(k, m, dx)
+% DIV  Mimetic 1-D divergence operator using Björck-Pereyra Vandermonde solver
+%    D = DIV(k,m,dx) returns the (m+2)×(m+1) sparse divergence matrix of
+%    order-k accuracy on a uniform grid of spacing dx.
 %
-% Parameters:
-%                k : Order of accuracy
-%                m : Number of cells
-%               dx : Step size
+%    Compared with the original version, this code
+%    ──────────────────────────────────────────────
+%      • avoids building full Vandermonde matrices;
+%      • relies on the O(k²) Björck-Pereyra algorithm (primal form);
+%      • is numerically stabler for large k.
 
-    % Assertions:
-    assert(k >= 2, 'k >= 2');
-    assert(mod(k, 2) == 0, 'k % 2 = 0');
-    assert(m >= 2*k+1, ['m >= ' num2str(2*k+1) ' for k = ' num2str(k)]);
-    n_rows=m+2;
-    n_cols=m+1;
+    %% sanity checks ------------------------------------------------------
+    assert(k >= 2 && mod(k,2)==0, 'k must be an even integer ≥ 2');
+    assert(m >= 2*k+1, 'Need at least 2k+1 cells for order-k scheme');
 
-    D = sparse(n_rows,n_cols);
+    nRows = m + 2;         % = #faces
+    nCols = m + 1;         % = #cells
+    D     = sparse(nRows, nCols);
 
-    switch k
-        case 2
-            for i = 2:n_cols
-               D(i, i-1:i) = [-1 1];
-            end
-
-        case 4
-            A = [-11/12 17/24 3/8 -5/24 1/24];
-            D(2, 1:5) = A;
-            D(m+1, m-3:end) = -fliplr(A);
-            for i = 3:n_cols-1
-               D(i, i-2:i+1) = [1/24 -9/8 9/8 -1/24];
-            end
-
-        case 6
-            A = [-1627/1920  211/640  59/48  -235/192 91/128 -443/1920 31/960; ...
-                    31/960  -687/640 129/128   19/192 -3/32    21/640  -3/640];
-            D(2:3, 1:7) = A;
-            D(m:m+1, m-5:end) = -rot90(A,2);
-            for i = 4:n_cols-2
-                D(i, i-3:i+2) = [-3/640 25/384 -75/64 75/64 -25/384 3/640];
-            end
-
-        case 8
-            A = [-1423/1792     -491/7168   7753/3072 -18509/5120  3535/1024 -2279/1024  953/1024 -1637/7168  2689/107520; ...
-                  2689/107520 -36527/35840  4259/5120   6497/15360 -475/1024  1541/5120 -639/5120  1087/35840  -59/17920; ...
-                   -59/17920    1175/21504 -1165/1024   1135/1024    25/3072  -251/5120   25/1024   -45/7168     5/7168];
-            D(2:4, 1:9) = A;
-            D(m-1:m+1, m-7:end) = -rot90(A,2);
-            for i = 5:n_cols-3
-                D(i, i-4:i+3) = [5/7168 -49/5120 245/3072 -1225/1024 1225/1024 -245/3072 49/5120 -5/7168];
-            end
-        otherwise 
-            neighbors = zeros(1, k); % Bandwidth = k
-            neighbors(1) = 1/2 - k/2;
-            for i = 2 : k
-                neighbors(i) = neighbors(i-1)+1;
-            end
-    
-    
-            A = invvander(neighbors);
-    
-   
-            b = zeros(k, 1);
-            b(2) = 1;
-    
-    
-            coeffs = A*b;
-    
-            j = 1;
-            for i = k/2+1 : n_rows - k/2
-                D(i, j:j+k-1) = coeffs;
-                j = j + 1;
-            end
-    
-            p = k/2-1;
-            q = k+1;
-            A = sparse(p, q);
-            for i = 1 : p % For each row of A
-                neighbors = zeros(1, q); % k+1 points are used for the boundaries
-                neighbors(1) = 1/2 - i; % Shifting the stencil to the right
-                for j = 2 : q
-                    neighbors(j) = neighbors(j-1)+1;
-                end
-                V = invvander(neighbors);
-                b = zeros(q, 1);
-                b(2) = 1;
-                coeffs = V*b;
-                A(i, 1:q) = coeffs;
-            end
-   
-            D(2:p+1, 1:q) = A;
-    
-    
-
-            Pp = fliplr(speye(p));
-            Pq = fliplr(speye(q));
-        
-            A = -Pp*A*Pq;
-    
-    
-           D(n_rows-p:n_rows-1, n_cols-q+1:n_cols) = A;
+    %% central rows (interior stencil) ------------------------------------
+    % stencil abscissae relative to the cell face
+    s = (1/2 - k/2) + (0:k-1);             % length-k vector
+    d=zeros([1,k]);
+    d(2)=1;
+    coeffs = vandSolveBP(s, d);      % 1st-derivative moments
+     j = 1;
+    for i = k/2+1 : nRows - k/2
+        D(i, j:j+k-1) = coeffs;
+        j = j + 1;
     end
-    D = (1/dx).*D;
+    %% boundary closures --------------------------------------------------
+    p = k/2 - 1;      % #extra rows to build at each end
+    q = k + 1;        % stencil width for boundaries
+    d=[d 0];
+    for i = 1:p 
+            s = (1/2 - i) + (0:q-1);       % shifted stencil
+            c = vandSolveBP(s, d);   % derivative coefficients
+                  % left block
+            D(1+i, 1:q) = c;
+            c=-c(end:-1:1);
+            D(nRows-i, nCols-q+1:nCols)=c;
+    end
+    D = D / dx;   % scale by grid spacing
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function a = vandSolveBP(alpha, b)
+% vandSolveBP  Björck-Pereyra O(n²) solver for V(alpha)*a = b.
+%
+%   alpha : vector of abscissae (length n)
+%   b     : right-hand side  (length n)
+%   a     : solution         (length n)
+%
+% The implementation follows the two-sweep triangular scheme published in
+% Björck & Pereyra (1970).
 
+    n = numel(alpha) - 1;          % index runs 0..n
+    a = b(:).';                    % work in row-vector form
+
+    %% forward sweep  (Step (i) – triangular L factor)
+    for k = 1:n
+        for j = n+1:-1:k+1
+            j;
+            a(j) = a(j) - alpha(k)*a(j-1);
+        end
+    end
+
+    %% backward sweep (Step (ii) – triangular U factor)
+    for k = n:-1:1
+        for j = k+1:n+1
+            a(j) = a(j) / (alpha(j) - alpha(j-k));
+        end
+        for j = k:n
+            a(j) = a(j) - a(j+1);
+        end
+    end
 end
